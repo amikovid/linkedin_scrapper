@@ -1,0 +1,20 @@
+# Local config (contains API key — never commit)
+.scraper_config.json
+
+# Output files
+results.csv
+linkedin_analysis.csv
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
