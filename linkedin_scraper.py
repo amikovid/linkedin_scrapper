@@ -207,34 +207,161 @@ def parse_posts(html_content: str, source_file: str, follower_count: int | None 
                 if m:
                     timestamp = m.group(1)
 
-        # Engagement score: weight comments 2x (per framework — comments signal real engagement)
-        engagement_score = reactions + (comments * 2) + reposts
+        posts.append(_make_post_record(
+            Path(source_file).name, author, idx, raw_text,
+            detect_format(post),
+            reactions, comments, reposts, followers, timestamp
+        ))
 
-        # Per-follower metrics (per 1,000 followers) — normalises for account size
-        def per_1k(n):
-            if followers and followers > 0:
-                return round(n / followers * 1000, 4)
-            return None
+    return posts
 
-        posts.append({
-            "source_file": Path(source_file).name,
-            "author": author,
-            "post_num": idx,
-            "text": raw_text,
-            "hook_line": raw_text.splitlines()[0][:120],
-            "word_count": len(raw_text.split()),
-            "format": detect_format(post),
-            "reactions": reactions,
-            "comments": comments,
-            "reposts": reposts,
-            "comment_like_ratio": round(comments / reactions, 3) if reactions > 0 else 0.0,
-            "engagement_score": engagement_score,
-            "followers": followers,
-            "reactions_per_1k": per_1k(reactions),
-            "comments_per_1k": per_1k(comments),
-            "eng_score_per_1k": per_1k(engagement_score),
-            "time_posted": timestamp,
-        })
+
+def _make_post_record(
+    source_label, author, post_num, text, fmt,
+    reactions, comments, reposts, followers, timestamp
+) -> dict:
+    """Shared helper — builds a normalised post dict from extracted fields."""
+    engagement_score = reactions + (comments * 2) + reposts
+
+    def per_1k(n):
+        if followers and followers > 0:
+            return round(n / followers * 1000, 4)
+        return None
+
+    return {
+        "source_file": source_label,
+        "author": author,
+        "post_num": post_num,
+        "text": text,
+        "hook_line": text.splitlines()[0][:120] if text else "",
+        "word_count": len(text.split()),
+        "format": fmt,
+        "reactions": reactions,
+        "comments": comments,
+        "reposts": reposts,
+        "comment_like_ratio": round(comments / reactions, 3) if reactions > 0 else 0.0,
+        "engagement_score": engagement_score,
+        "followers": followers,
+        "reactions_per_1k": per_1k(reactions),
+        "comments_per_1k": per_1k(comments),
+        "eng_score_per_1k": per_1k(engagement_score),
+        "time_posted": timestamp,
+    }
+
+
+# Reaction type words LinkedIn concatenates (e.g. "likelovecelebrate")
+_REACTION_WORDS = r"(?:like|love|celebrate|support|insightful|funny|curious|care|clapping|thinking)+"
+
+
+def _normalise_text(raw: str) -> str:
+    """Normalise smart quotes/apostrophes to ASCII so regex matching is consistent."""
+    return (raw
+            .replace("\u2018", "'").replace("\u2019", "'")  # curly single quotes
+            .replace("\u201c", '"').replace("\u201d", '"')  # curly double quotes
+            .replace("\u2013", "-").replace("\u2014", "--")) # en/em dash
+
+
+def parse_plain_text(raw: str, source_label: str, follower_count: int | None = None) -> list[dict]:
+    """
+    Parse a plain-text dump of a LinkedIn activity page.
+    Produced by selecting all (Ctrl+A) on the page and pasting.
+    Each post is delimited by 'Feed post number N'.
+    """
+    raw = _normalise_text(raw)
+    blocks = re.split(r"Feed post number \d+\s*\n?", raw, flags=re.I)
+
+    # Try to infer the page author from the very first block (profile header)
+    page_author = "Unknown"
+    if blocks:
+        m = re.search(r"View (.+?)'s\s+graphic link", blocks[0])
+        if m:
+            page_author = m.group(1).strip()
+
+    posts = []
+    post_num = 0
+
+    for block in blocks[1:]:
+        if not block.strip():
+            continue
+
+        # Skip reposts (person reposted someone else's content — not original)
+        if re.search(r"\breposted this\b", block, re.I):
+            continue
+
+        post_num += 1
+
+        # --- Author ---
+        author_m = re.search(r"View (.+?)'s\s+graphic link", block)
+        author = author_m.group(1).strip() if author_m else page_author
+
+        # --- Follower count (present for company pages embedded in feed) ---
+        fc_m = re.search(r"([\d,]+)\s+followers", block)
+        detected_fc = int(fc_m.group(1).replace(",", "")) if fc_m else None
+        followers = follower_count or detected_fc
+
+        # --- Timestamp ---
+        # Matches "17h •", "2d •", "1w •", "3mo •"
+        ts_m = re.search(r"(\d+(?:mo|[hdwm]))\s*[•·]", block)
+        if not ts_m:
+            ts_m = re.search(r"(\d+\s+(?:hour|day|week|month)s?\s+ago)", block, re.I)
+        timestamp = ts_m.group(1).strip() if ts_m else ""
+
+        # --- Locate where post body starts ---
+        # The timestamp sits on a line like "17h • Edited •  17 hours ago..."
+        # Body starts on the first non-blank line after that.
+        ts_line_m = re.search(
+            r"(?:\d+(?:mo|[hdwm])\s*[•·]|ago\s*[•·]).*\n",
+            block, re.I
+        )
+        body_start = ts_line_m.end() if ts_line_m else 0
+
+        # --- Locate where engagement section starts ---
+        # Engagement block: line of concatenated reaction words (e.g. "likelovecelebrate")
+        eng_m = re.search(
+            r"^" + _REACTION_WORDS + r"\s*$",
+            block[body_start:], re.I | re.MULTILINE
+        )
+        if eng_m:
+            eng_abs = body_start + eng_m.start()
+        else:
+            # Fallback: find the action-button block "Like\nComment\nRepost\nSend"
+            btn_m = re.search(r"\nLike\s*\n", block[body_start:])
+            eng_abs = body_start + btn_m.start() if btn_m else len(block)
+
+        # --- Extract & clean post text ---
+        post_text = block[body_start:eng_abs].strip()
+        post_text = re.sub(r"Activate to view larger image,?\s*\n?", "", post_text)
+        post_text = re.sub(r"No alternative text description for this image\s*\n?", "", post_text)
+        post_text = re.sub(r"hashtag#", "#", post_text)
+        post_text = re.sub(r"\n{3,}", "\n\n", post_text).strip()
+
+        if not post_text:
+            continue
+
+        # --- Engagement numbers from the engagement block ---
+        eng_block = block[eng_abs:]
+
+        reactions = 0
+        comments = 0
+        reposts = 0
+
+        # Reaction count: first standalone integer after the reaction-word line
+        rc_m = re.search(r"^([\d,]+)\s*$", eng_block, re.MULTILINE)
+        if rc_m:
+            reactions = int(rc_m.group(1).replace(",", ""))
+
+        cm_m = re.search(r"([\d,]+)\s+comments?", eng_block, re.I)
+        if cm_m:
+            comments = int(cm_m.group(1).replace(",", ""))
+
+        rp_m = re.search(r"([\d,]+)\s+reposts?", eng_block, re.I)
+        if rp_m:
+            reposts = int(rp_m.group(1).replace(",", ""))
+
+        posts.append(_make_post_record(
+            source_label, author, post_num, post_text, "Text Only",
+            reactions, comments, reposts, followers, timestamp
+        ))
 
     return posts
 

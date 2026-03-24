@@ -15,7 +15,7 @@ import pandas as pd
 
 # Import core logic from the scraper
 sys.path.insert(0, str(Path(__file__).parent))
-from linkedin_scraper import parse_posts, select_top_posts, classify_posts_with_api
+from linkedin_scraper import parse_posts, parse_plain_text, select_top_posts, classify_posts_with_api, _normalise_text
 
 # ---------------------------------------------------------------------------
 # Config persistence (saves API key locally)
@@ -100,35 +100,61 @@ with st.sidebar:
 # Input — tabs for file upload vs. paste
 # ---------------------------------------------------------------------------
 
-tab_upload, tab_paste = st.tabs(["📁 Upload HTML file", "📋 Paste HTML"])
+tab_upload, tab_paste_html, tab_paste_text = st.tabs([
+    "📁 Upload file", "📋 Paste HTML", "📝 Paste plain text (easiest)"
+])
 
-inputs = []  # list of (label, html_string, follower_count_override)
+# inputs: list of (label, content_string, follower_count_override, mode)
+# mode: "html" | "text"
+inputs = []
 
 with tab_upload:
+    st.caption("Save a LinkedIn activity page with **Ctrl+S → Webpage, Complete** and upload the .html file.")
     uploaded_files = st.file_uploader(
-        "Drop LinkedIn activity HTML files here",
+        "Drop LinkedIn HTML or text files here",
         type=["html", "htm", "txt"],
         accept_multiple_files=True,
-        help="Save a LinkedIn activity page with Ctrl+S (Full Webpage) and upload the .html file.",
     )
     if uploaded_files:
         for f in uploaded_files:
             fc = st.number_input(
-                f"Follower count for **{f.name}** (leave 0 if unknown — will try to detect from HTML)",
+                f"Follower count for **{f.name}** (0 = auto-detect from file)",
                 min_value=0, value=0, step=1000, key=f"fc_upload_{f.name}",
             )
-            inputs.append((f.name, f.read().decode("utf-8", errors="ignore"), fc or None))
+            raw = f.read().decode("utf-8", errors="replace")
+            mode = "text" if f.name.endswith(".txt") else "html"
+            inputs.append((f.name, raw, fc or None, mode))
 
-with tab_paste:
-    st.caption("Open a LinkedIn activity page, press Ctrl+S → save as 'Webpage, Complete', then upload above. Or paste the raw page source (Ctrl+U) here.")
-    pasted_label = st.text_input("Account name / label", value="Pasted HTML")
-    pasted_fc = st.number_input(
-        "Follower count (leave 0 if unknown — will try to detect from HTML)",
-        min_value=0, value=0, step=1000, key="fc_paste",
+with tab_paste_html:
+    st.caption("Open a LinkedIn activity page → Ctrl+U (view source) → Ctrl+A, Ctrl+C → paste below.")
+    pasted_label_html = st.text_input("Account name / label", value="Pasted HTML", key="lbl_html")
+    pasted_fc_html = st.number_input(
+        "Follower count (0 = auto-detect)",
+        min_value=0, value=0, step=1000, key="fc_paste_html",
     )
-    pasted_html = st.text_area("Paste HTML here", height=200, placeholder="<html>...</html>")
+    pasted_html = st.text_area("Paste HTML here", height=220, placeholder="<html>...</html>", key="paste_html")
     if pasted_html.strip():
-        inputs.append((pasted_label or "Pasted HTML", pasted_html, pasted_fc or None))
+        inputs.append((pasted_label_html or "Pasted HTML", pasted_html, pasted_fc_html or None, "html"))
+
+with tab_paste_text:
+    st.caption(
+        "**Easiest method:** Open a LinkedIn activity page in your browser, press **Ctrl+A** (select all) "
+        "then **Ctrl+C** (copy), then paste everything below. Works regardless of HTML structure."
+    )
+    pasted_label_text = st.text_input("Account name / label", value="Pasted text", key="lbl_text")
+    pasted_fc_text = st.number_input(
+        "Follower count for this account (look it up on their profile)",
+        min_value=0, value=0, step=1000, key="fc_paste_text",
+        help="Required for per-follower normalisation. Leave 0 to skip normalisation.",
+    )
+    pasted_text = st.text_area(
+        "Paste everything here",
+        height=300,
+        placeholder="Select all on the LinkedIn page (Ctrl+A), copy (Ctrl+C), paste here (Ctrl+V)...",
+        key="paste_text",
+    )
+    if pasted_text.strip():
+        inputs.append((pasted_label_text or "Pasted text", pasted_text, pasted_fc_text or None, "text"))
 
 if not inputs:
     st.info("Upload a file or paste HTML above to get started.")
@@ -154,9 +180,13 @@ if not run:
 all_raw_posts = []
 all_top_posts = []
 
-for label, content, follower_override in inputs:
+for label, content, follower_override, mode in inputs:
+    content = _normalise_text(content)
     with st.spinner(f"Parsing {label}…"):
-        posts = parse_posts(content, label, follower_count=follower_override)
+        if mode == "text":
+            posts = parse_plain_text(content, label, follower_count=follower_override)
+        else:
+            posts = parse_posts(content, label, follower_count=follower_override)
 
     if not posts:
         st.warning(f"No posts found in '{label}'. Make sure it's a LinkedIn activity page.")
