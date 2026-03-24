@@ -120,6 +120,7 @@ def extract_follower_count(soup) -> int | None:
 
 
 def detect_format(post_soup) -> str:
+    """Detect format from HTML BeautifulSoup element."""
     if post_soup.find(class_=re.compile(r"update-components-document")):
         return "Carousel (document)"
     if post_soup.find(class_=re.compile(r"update-components-image--single")):
@@ -128,6 +129,25 @@ def detect_format(post_soup) -> str:
         return "Video"
     if post_soup.find(class_=re.compile(r"update-components-article|feed-shared-article")):
         return "Article/Link"
+    return "Text Only"
+
+
+def detect_format_from_text(block: str) -> str:
+    """
+    Detect post format from a plain-text LinkedIn page dump block.
+
+    Signal hierarchy (checked in priority order):
+      Video     — "Unmute" or "Playback speed" or "Turn fullscreen on" or "Turn closed captions"
+      Carousel  — "Your document has finished loading"
+      Image     — "Activate to view larger image," appears (LinkedIn renders this for every image)
+      Text Only — none of the above
+    """
+    if re.search(r"^(Unmute|Playback speed|Turn fullscreen on|Turn closed captions)", block, re.MULTILINE | re.I):
+        return "Video"
+    if re.search(r"Your document has finished loading", block, re.I):
+        return "Carousel (document)"
+    if re.search(r"Activate to view larger image,", block, re.I):
+        return "Single Image"
     return "Text Only"
 
 
@@ -359,7 +379,8 @@ def parse_plain_text(raw: str, source_label: str, follower_count: int | None = N
             reposts = int(rp_m.group(1).replace(",", ""))
 
         posts.append(_make_post_record(
-            source_label, author, post_num, post_text, "Text Only",
+            source_label, author, post_num, post_text,
+            detect_format_from_text(block),
             reactions, comments, reposts, followers, timestamp
         ))
 

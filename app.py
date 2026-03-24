@@ -336,8 +336,9 @@ for p in classified:
 # ---------------------------------------------------------------------------
 
 st.markdown("### Pattern Frequency Summary")
+st.caption("Counts across all analysed posts. Download the full table below.")
 
-var_cols = {
+VAR_COLS = {
     "Variable 1 — Hook Type": "hook_type",
     "Variable 2 — Body Type": "body_type",
     "Variable 3 — CTA Type": "cta_type",
@@ -345,16 +346,19 @@ var_cols = {
     "Variable 5 — Format": "format",
 }
 
-summary_cols = st.columns(len(var_cols))
-for col_ui, (label, field) in zip(summary_cols, var_cols.items()):
+summary_cols = st.columns(len(VAR_COLS))
+freq_tables: dict[str, pd.DataFrame] = {}
+
+for col_ui, (label, field) in zip(summary_cols, VAR_COLS.items()):
+    counts = pd.Series([p.get(field, "") for p in classified]).value_counts().reset_index()
+    counts.columns = ["Value", "Count"]
+    freq_tables[label] = counts
     with col_ui:
         st.markdown(f"**{label}**")
-        counts = pd.Series([p.get(field, "") for p in classified]).value_counts().reset_index()
-        counts.columns = ["Value", "Count"]
         st.dataframe(counts, hide_index=True, use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# CSV download
+# Export
 # ---------------------------------------------------------------------------
 
 st.divider()
@@ -373,15 +377,120 @@ priority_keys = [
 all_keys = list(classified[0].keys())
 fieldnames = [k for k in priority_keys if k in all_keys] + [k for k in all_keys if k not in priority_keys]
 
+# --- Post data CSV ---
 csv_buf = io.StringIO()
 writer = csv.DictWriter(csv_buf, fieldnames=fieldnames)
 writer.writeheader()
 writer.writerows(classified)
 
-st.download_button(
-    label="Download CSV",
-    data=csv_buf.getvalue().encode("utf-8"),
-    file_name="linkedin_analysis.csv",
-    mime="text/csv",
-    use_container_width=True,
-)
+# --- Frequency table CSV ---
+freq_rows = []
+for var_label, df in freq_tables.items():
+    for _, row in df.iterrows():
+        freq_rows.append({"Variable": var_label, "Value": row["Value"], "Count": int(row["Count"])})
+freq_buf = io.StringIO()
+freq_writer = csv.DictWriter(freq_buf, fieldnames=["Variable", "Value", "Count"])
+freq_writer.writeheader()
+freq_writer.writerows(freq_rows)
+
+# --- Markdown report ---
+def build_markdown_report(posts: list[dict], freq_tables: dict) -> str:
+    from datetime import date
+    authors = list(dict.fromkeys(p["author"] for p in posts))
+    lines = [
+        "# LinkedIn Post Analysis Report",
+        f"**Generated:** {date.today()}",
+        f"**Authors analysed:** {', '.join(authors)}",
+        f"**Posts analysed:** {len(posts)}",
+        "",
+        "> **Framework reference:** TESTING-FRAMEWORK.md",
+        "> Variables 1–5 below map directly to the hypothesis table in that document.",
+        "> Classification values are enclosed in backticks for LLM parsing.",
+        "",
+        "---",
+        "",
+        "## Pattern Frequency Summary",
+        "",
+    ]
+    for var_label, df in freq_tables.items():
+        lines.append(f"### {var_label}")
+        lines.append("")
+        lines.append("| Value | Count |")
+        lines.append("|-------|-------|")
+        for _, row in df.iterrows():
+            lines.append(f"| {row['Value']} | {int(row['Count'])} |")
+        lines.append("")
+
+    lines += ["---", "", "## Per-Post Analysis", ""]
+
+    for p in posts:
+        followers_str = f"{p['followers']:,}" if p.get("followers") else "unknown"
+        eng_per_1k = f"{p['eng_score_per_1k']}" if p.get("eng_score_per_1k") is not None else "n/a"
+        lines += [
+            f"### Post #{p['post_num']} — {p['author']}",
+            "",
+            f"**Engagement:** {p['reactions']} reactions · {p['comments']} comments · {p['reposts']} reposts · C/L ratio: {p['comment_like_ratio']}",
+            f"**Followers:** {followers_str} | **Eng.Score/1k:** {eng_per_1k}",
+            f"**Posted:** {p.get('time_posted', 'unknown')} ago",
+            "",
+            "#### Variable 1: Hook Type",
+            f"**Classification:** `{p.get('hook_type', '—')}`",
+            f"**Analysis:** {p.get('hook_analysis', '—')}",
+            "",
+            "#### Variable 2: Body Type",
+            f"**Classification:** `{p.get('body_type', '—')}`",
+            f"**Analysis:** {p.get('body_analysis', '—')}",
+            "",
+            "#### Variable 3: CTA Type",
+            f"**Classification:** `{p.get('cta_type', '—')}`",
+            f"**Analysis:** {p.get('cta_analysis', '—')}",
+            "",
+            "#### Variable 4: Person Featured",
+            f"**Classification:** `{p.get('person_featured', '—')}`",
+            "",
+            "#### Variable 5: Format",
+            f"**Classification:** `{p.get('format', '—')}`",
+            "",
+            "#### Standout Replicable Pattern",
+            f"> {p.get('standout_pattern', '—')}",
+            "",
+            "#### Verbatim Post Text",
+            "```",
+            p.get("text", ""),
+            "```",
+            "",
+            "---",
+            "",
+        ]
+    return "\n".join(lines)
+
+md_content = build_markdown_report(classified, freq_tables)
+
+col_dl1, col_dl2, col_dl3 = st.columns(3)
+
+with col_dl1:
+    st.download_button(
+        label="📥 Download post data (CSV)",
+        data=csv_buf.getvalue().encode("utf-8"),
+        file_name="linkedin_posts.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+with col_dl2:
+    st.download_button(
+        label="📥 Download frequency table (CSV)",
+        data=freq_buf.getvalue().encode("utf-8"),
+        file_name="linkedin_frequency.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+with col_dl3:
+    st.download_button(
+        label="📥 Download full analysis (Markdown)",
+        data=md_content.encode("utf-8"),
+        file_name="linkedin_analysis.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
