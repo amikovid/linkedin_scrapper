@@ -97,6 +97,28 @@ CLASSIFICATION_SCHEMA = {
 # Step 1: HTML Parsing
 # ---------------------------------------------------------------------------
 
+def extract_follower_count(soup) -> int | None:
+    """
+    Try to find the page author's follower count in the HTML.
+    LinkedIn activity pages sometimes include it in the profile header or
+    in actor metadata for company pages. Returns None if not found.
+    """
+    # Pattern 1: aria-label on actor meta link e.g. "View: Name 123,456 followers"
+    for tag in soup.find_all(attrs={"aria-label": re.compile(r"[\d,]+ followers", re.I)}):
+        m = re.search(r"([\d,]+)\s+followers", tag.get("aria-label", ""), re.I)
+        if m:
+            return int(m.group(1).replace(",", ""))
+
+    # Pattern 2: span text "123,456 followers"
+    for tag in soup.find_all("span", attrs={"aria-hidden": "true"}):
+        text = tag.get_text(strip=True)
+        m = re.match(r"^([\d,]+)\s+followers$", text, re.I)
+        if m:
+            return int(m.group(1).replace(",", ""))
+
+    return None
+
+
 def detect_format(post_soup) -> str:
     if post_soup.find(class_=re.compile(r"update-components-document")):
         return "Carousel (document)"
@@ -109,7 +131,7 @@ def detect_format(post_soup) -> str:
     return "Text Only"
 
 
-def parse_posts(html_content: str, source_file: str) -> list[dict]:
+def parse_posts(html_content: str, source_file: str, follower_count: int | None = None) -> list[dict]:
     """Parse all posts from a LinkedIn activity HTML page. Returns raw data only — no classification."""
     soup = BeautifulSoup(html_content, "lxml")
 
@@ -119,6 +141,9 @@ def parse_posts(html_content: str, source_file: str) -> list[dict]:
         parts = title_tag.text.split("|")
         if len(parts) >= 2:
             author = parts[1].strip()
+
+    # Use provided follower count or try to detect from HTML
+    followers = follower_count or extract_follower_count(soup)
 
     post_divs = soup.find_all("div", class_=re.compile(r"feed-shared-update-v2\b"))
 
@@ -185,6 +210,12 @@ def parse_posts(html_content: str, source_file: str) -> list[dict]:
         # Engagement score: weight comments 2x (per framework — comments signal real engagement)
         engagement_score = reactions + (comments * 2) + reposts
 
+        # Per-follower metrics (per 1,000 followers) — normalises for account size
+        def per_1k(n):
+            if followers and followers > 0:
+                return round(n / followers * 1000, 4)
+            return None
+
         posts.append({
             "source_file": Path(source_file).name,
             "author": author,
@@ -198,6 +229,10 @@ def parse_posts(html_content: str, source_file: str) -> list[dict]:
             "reposts": reposts,
             "comment_like_ratio": round(comments / reactions, 3) if reactions > 0 else 0.0,
             "engagement_score": engagement_score,
+            "followers": followers,
+            "reactions_per_1k": per_1k(reactions),
+            "comments_per_1k": per_1k(comments),
+            "eng_score_per_1k": per_1k(engagement_score),
             "time_posted": timestamp,
         })
 
@@ -205,8 +240,10 @@ def parse_posts(html_content: str, source_file: str) -> list[dict]:
 
 
 def select_top_posts(posts: list[dict], top_n: int | None, top_pct: int | None) -> list[dict]:
-    """Return top performers by engagement score."""
-    ranked = sorted(posts, key=lambda p: p["engagement_score"], reverse=True)
+    """Return top performers. Uses per-follower score when follower count is available, otherwise raw score."""
+    use_per_follower = any(p.get("eng_score_per_1k") is not None for p in posts)
+    sort_key = "eng_score_per_1k" if use_per_follower else "engagement_score"
+    ranked = sorted(posts, key=lambda p: p[sort_key] or 0, reverse=True)
     if top_n:
         return ranked[:top_n]
     if top_pct:

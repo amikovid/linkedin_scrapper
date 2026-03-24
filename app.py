@@ -102,7 +102,7 @@ with st.sidebar:
 
 tab_upload, tab_paste = st.tabs(["📁 Upload HTML file", "📋 Paste HTML"])
 
-inputs = []  # list of (label, html_string)
+inputs = []  # list of (label, html_string, follower_count_override)
 
 with tab_upload:
     uploaded_files = st.file_uploader(
@@ -113,14 +113,22 @@ with tab_upload:
     )
     if uploaded_files:
         for f in uploaded_files:
-            inputs.append((f.name, f.read().decode("utf-8", errors="ignore")))
+            fc = st.number_input(
+                f"Follower count for **{f.name}** (leave 0 if unknown — will try to detect from HTML)",
+                min_value=0, value=0, step=1000, key=f"fc_upload_{f.name}",
+            )
+            inputs.append((f.name, f.read().decode("utf-8", errors="ignore"), fc or None))
 
 with tab_paste:
-    st.caption("Open a LinkedIn activity page, press Ctrl+A then Ctrl+U (view source), copy all, paste below.")
-    pasted_label = st.text_input("Label for this paste (e.g. account name)", value="Pasted HTML")
+    st.caption("Open a LinkedIn activity page, press Ctrl+S → save as 'Webpage, Complete', then upload above. Or paste the raw page source (Ctrl+U) here.")
+    pasted_label = st.text_input("Account name / label", value="Pasted HTML")
+    pasted_fc = st.number_input(
+        "Follower count (leave 0 if unknown — will try to detect from HTML)",
+        min_value=0, value=0, step=1000, key="fc_paste",
+    )
     pasted_html = st.text_area("Paste HTML here", height=200, placeholder="<html>...</html>")
     if pasted_html.strip():
-        inputs.append((pasted_label or "Pasted HTML", pasted_html))
+        inputs.append((pasted_label or "Pasted HTML", pasted_html, pasted_fc or None))
 
 if not inputs:
     st.info("Upload a file or paste HTML above to get started.")
@@ -146,9 +154,9 @@ if not run:
 all_raw_posts = []
 all_top_posts = []
 
-for label, content in inputs:
+for label, content, follower_override in inputs:
     with st.spinner(f"Parsing {label}…"):
-        posts = parse_posts(content, label)
+        posts = parse_posts(content, label, follower_count=follower_override)
 
     if not posts:
         st.warning(f"No posts found in '{label}'. Make sure it's a LinkedIn activity page.")
@@ -159,7 +167,11 @@ for label, content in inputs:
     all_top_posts.extend(top)
 
     author = posts[0]["author"]
-    st.success(f"**{label}** → {len(posts)} posts found, top {len(top)} selected for analysis (author: {author})")
+    followers = posts[0].get("followers")
+    follower_str = f" | {followers:,} followers" if followers else " | follower count unknown"
+    use_per_follower = followers is not None
+    sort_note = "ranked by eng. score per 1k followers" if use_per_follower else "ranked by raw eng. score (no follower count)"
+    st.success(f"**{label}** → {len(posts)} posts found, top {len(top)} selected ({sort_note}){follower_str}")
 
 if not all_top_posts:
     st.error("No posts could be extracted from the uploaded files.")
@@ -171,8 +183,11 @@ if not all_top_posts:
 
 st.subheader("📊 Posts selected for analysis")
 
-engagement_df = pd.DataFrame([
-    {
+has_followers = any(p.get("followers") for p in all_top_posts)
+
+engagement_rows = []
+for p in all_top_posts:
+    row = {
         "Author": p["author"],
         "#": p["post_num"],
         "Hook (first line)": p["hook_line"],
@@ -183,10 +198,22 @@ engagement_df = pd.DataFrame([
         "Reposts": p["reposts"],
         "C/L Ratio": p["comment_like_ratio"],
         "Eng. Score": p["engagement_score"],
-        "Time Posted": p["time_posted"],
     }
-    for p in all_top_posts
-])
+    if has_followers:
+        row["Followers"] = p.get("followers") or "—"
+        row["Reactions/1k"] = p.get("reactions_per_1k") or "—"
+        row["Comments/1k"] = p.get("comments_per_1k") or "—"
+        row["Eng.Score/1k"] = p.get("eng_score_per_1k") or "—"
+    row["Time Posted"] = p["time_posted"]
+    engagement_rows.append(row)
+
+engagement_df = pd.DataFrame(engagement_rows)
+
+if has_followers:
+    st.caption("Sorted by Eng.Score/1k followers — normalised for account size.")
+else:
+    st.caption("No follower count provided — sorted by raw engagement score. Add follower count above to normalise.")
+
 st.dataframe(engagement_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
@@ -210,8 +237,9 @@ st.success("Classification complete.")
 
 st.markdown("### Variable Classifications")
 
-class_df = pd.DataFrame([
-    {
+class_rows = []
+for p in classified:
+    row = {
         "Author": p["author"],
         "#": p["post_num"],
         "Hook (first line)": p["hook_line"],
@@ -224,8 +252,11 @@ class_df = pd.DataFrame([
         "Comments": p["comments"],
         "C/L Ratio": p["comment_like_ratio"],
     }
-    for p in classified
-])
+    if p.get("eng_score_per_1k") is not None:
+        row["Eng.Score/1k"] = p["eng_score_per_1k"]
+    class_rows.append(row)
+
+class_df = pd.DataFrame(class_rows)
 st.dataframe(class_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
