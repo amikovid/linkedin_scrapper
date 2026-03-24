@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from linkedin_scraper import parse_posts, parse_plain_text, select_top_posts, classify_posts_with_api, _normalise_text
 
 # ---------------------------------------------------------------------------
-# Config persistence (saves API key locally)
+# Config persistence
+# Cloud: reads from st.secrets (set in Streamlit Community Cloud dashboard)
+# Local: reads/writes .scraper_config.json
 # ---------------------------------------------------------------------------
 
 CONFIG_FILE = Path(__file__).parent / ".scraper_config.json"
@@ -36,7 +38,18 @@ def load_config() -> dict:
 def save_config(data: dict):
     cfg = load_config()
     cfg.update(data)
-    CONFIG_FILE.write_text(json.dumps(cfg))
+    try:
+        CONFIG_FILE.write_text(json.dumps(cfg))
+    except Exception:
+        pass  # read-only filesystem on cloud — that's fine, key comes from st.secrets
+
+
+def get_secret_api_key() -> str:
+    """Return API key from Streamlit secrets if available (cloud deployment)."""
+    try:
+        return st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -59,17 +72,25 @@ st.caption("Upload saved LinkedIn activity HTML files → get AI-classified post
 with st.sidebar:
     st.header("⚙️ Settings")
 
+    # Cloud: key pre-loaded from st.secrets. Local: key from config file or manual entry.
+    secret_key = get_secret_api_key()
     cfg = load_config()
+    default_key = secret_key or cfg.get("api_key", "")
+    cloud_mode = bool(secret_key)
 
-    api_key = st.text_input(
-        "Anthropic API Key",
-        value=cfg.get("api_key", ""),
-        type="password",
-        help="Stored locally in .scraper_config.json — never sent anywhere except Anthropic's API.",
-    )
-    if api_key and api_key != cfg.get("api_key", ""):
-        save_config({"api_key": api_key})
-        st.success("API key saved.")
+    if cloud_mode:
+        st.success("API key loaded from server secrets.", icon="🔒")
+        api_key = secret_key
+    else:
+        api_key = st.text_input(
+            "Anthropic API Key",
+            value=default_key,
+            type="password",
+            help="Stored locally in .scraper_config.json — never sent anywhere except Anthropic's API.",
+        )
+        if api_key and api_key != cfg.get("api_key", ""):
+            save_config({"api_key": api_key})
+            st.success("API key saved.")
 
     st.divider()
 
