@@ -382,6 +382,7 @@ priority_keys = [
     "source_file", "author", "post_num", "hook_line",
     "hook_type", "hook_analysis", "body_type", "body_analysis",
     "cta_type", "cta_analysis", "person_featured", "format",
+    "emotional_triggers", "emotional_triggers_analysis",
     "word_count", "reactions", "comments", "reposts",
     "comment_like_ratio", "engagement_score", "time_posted",
     "standout_pattern", "text",
@@ -390,11 +391,7 @@ all_keys = list(classified[0].keys())
 fieldnames = [k for k in priority_keys if k in all_keys] + [k for k in all_keys if k not in priority_keys]
 
 csv_buf = io.StringIO()
-csv.DictWriter(csv_buf, fieldnames=fieldnames).writeheader() or None
-writer = csv.DictWriter(csv_buf, fieldnames=fieldnames)
-# reopen cleanly
-csv_buf = io.StringIO()
-dw = csv.DictWriter(csv_buf, fieldnames=fieldnames)
+dw = csv.DictWriter(csv_buf, fieldnames=fieldnames, extrasaction="ignore")
 dw.writeheader()
 dw.writerows(classified)
 
