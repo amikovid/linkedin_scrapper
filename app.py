@@ -474,6 +474,18 @@ def build_markdown_report(posts, freq_tables):
 md_content = build_markdown_report(classified, freq_tables)
 
 # ---------------------------------------------------------------------------
+# Build filename slug from author names
+# ---------------------------------------------------------------------------
+
+import re as _re
+_authors_slug = "_".join(
+    _re.sub(r"[^\w]+", "", a.replace(" ", "_"))
+    for a in list(dict.fromkeys(p["author"] for p in classified))
+)[:60] or "linkedin"
+_today = date.today().strftime("%Y-%m-%d")
+_fname_base = f"{_authors_slug}_{_today}"
+
+# ---------------------------------------------------------------------------
 # Export buttons
 # ---------------------------------------------------------------------------
 
@@ -485,7 +497,7 @@ with col_dl1:
     st.download_button(
         "📥 Post data (CSV)",
         data=csv_buf.getvalue().encode("utf-8"),
-        file_name="linkedin_posts.csv",
+        file_name=f"{_fname_base}_posts.csv",
         mime="text/csv",
         use_container_width=True,
     )
@@ -493,7 +505,7 @@ with col_dl2:
     st.download_button(
         "📥 Frequency table (CSV)",
         data=freq_buf.getvalue().encode("utf-8"),
-        file_name="linkedin_frequency.csv",
+        file_name=f"{_fname_base}_frequency.csv",
         mime="text/csv",
         use_container_width=True,
     )
@@ -501,7 +513,7 @@ with col_dl3:
     st.download_button(
         "📥 Full analysis (Markdown)",
         data=md_content.encode("utf-8"),
-        file_name="linkedin_analysis.md",
+        file_name=f"{_fname_base}_analysis.md",
         mime="text/markdown",
         use_container_width=True,
     )
