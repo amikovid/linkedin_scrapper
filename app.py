@@ -286,6 +286,7 @@ for p in classified:
         "CTA Type": p.get("cta_type", ""),
         "Person Featured": p.get("person_featured", ""),
         "Format": p["format"],
+        "Emotional Triggers": p.get("emotional_triggers", ""),
         "Reactions": p["reactions"], "Comments": p["comments"],
         "C/L Ratio": p["comment_like_ratio"],
     }
@@ -318,6 +319,8 @@ for p in classified:
             st.markdown(f"*Hook:* {p.get('hook_analysis', '—')}")
             st.markdown(f"*Body:* {p.get('body_analysis', '—')}")
             st.markdown(f"*CTA:* {p.get('cta_analysis', '—')}")
+            st.markdown(f"**Emotional Triggers:** {p.get('emotional_triggers', '—')}")
+            st.markdown(f"*{p.get('emotional_triggers_analysis', '')}*")
             st.markdown("**Standout Pattern**")
             st.info(p.get("standout_pattern", "—"))
         with col2:
@@ -342,16 +345,32 @@ VAR_COLS = {
     "Variable 4 — Person Featured": "person_featured",
     "Variable 5 — Format": "format",
 }
+# Variable 6 is multi-value per post — needs exploding before counting
+MULTI_VALUE_COLS = {"Variable 6 — Emotional Triggers": "emotional_triggers"}
 
 freq_tables: dict[str, pd.DataFrame] = {}
+
 for label_var, field in VAR_COLS.items():
     counts = pd.Series([p.get(field, "") for p in classified]).value_counts().reset_index()
     counts.columns = ["Value", "Count"]
     freq_tables[label_var] = counts
 
-summary_cols = st.columns(len(VAR_COLS))
-for col_ui, (label_var, df) in zip(summary_cols, freq_tables.items()):
-    with col_ui:
+for label_var, field in MULTI_VALUE_COLS.items():
+    # Explode comma-separated trigger lists into individual counts
+    all_triggers = []
+    for p in classified:
+        raw = p.get(field, "")
+        for t in raw.split(","):
+            t = t.strip()
+            if t:
+                all_triggers.append(t)
+    counts = pd.Series(all_triggers).value_counts().reset_index()
+    counts.columns = ["Value", "Count"]
+    freq_tables[label_var] = counts
+
+all_var_cols = st.columns(3)
+for i, (label_var, df) in enumerate(freq_tables.items()):
+    with all_var_cols[i % 3]:
         st.markdown(f"**{label_var}**")
         st.dataframe(df, hide_index=True, use_container_width=True)
 
@@ -383,6 +402,7 @@ freq_rows = [
     {"Variable": v, "Value": row["Value"], "Count": int(row["Count"])}
     for v, df in freq_tables.items()
     for _, row in df.iterrows()
+    if row["Value"]
 ]
 freq_buf = io.StringIO()
 fw = csv.DictWriter(freq_buf, fieldnames=["Variable", "Value", "Count"])
@@ -437,6 +457,10 @@ def build_markdown_report(posts, freq_tables):
             "",
             "#### Variable 5: Format",
             f"**Classification:** `{p.get('format', '—')}`",
+            "",
+            "#### Variable 6: Emotional Triggers",
+            f"**Active triggers:** `{p.get('emotional_triggers', '—')}`",
+            f"**Analysis:** {p.get('emotional_triggers_analysis', '—')}",
             "",
             "#### Standout Replicable Pattern",
             f"> {p.get('standout_pattern', '—')}",

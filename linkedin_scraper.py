@@ -46,6 +46,7 @@ Which opening pattern was used?
 Note: A big specific number (count, $, time) followed by the story behind it is common in high-performing posts — classify as Data/Stat-first even if it reads like a story opener.
 
 ## Variable 2: Content Body Type
+
 What structure does the body of the post follow?
 - Story Arc: setup → complication → resolution; one person's journey
 - Data Narrative: surprising stat → interpretation → implication
@@ -79,6 +80,16 @@ What visual format does the post use?
 - Carousel (document): multi-slide PDF/document carousel
 - Video: native video
 - Article/Link: shared article or external link with preview card
+
+## Variable 6: Emotional Triggers (The 6 Triggers Framework)
+Which of the 6 emotional triggers are active in this post? A post can use multiple triggers simultaneously — the best viral content typically uses 2–4 at once. Identify ALL that apply.
+
+- Identity Validation: makes the reader feel seen, called out, or validated for something they privately believe but haven't said aloud. Often uses "you" statements that name an uncomfortable psychological truth. The reader feels either called out (if true) or vindicated (if they've overcome it).
+- Status Signaling: gives the reader something shareable that signals intelligence, being ahead of the curve, or insider knowledge to their own network. Ask: what does sharing this post say about the person who shares it?
+- Tribal Belonging: creates a clear in-group/out-group split. Positions the reader as part of a sophisticated "us" versus a naive "them." Often uses "two types of people" or contrasts beginners vs. experts.
+- Productive Discomfort: creates cognitive dissonance — exposes a gap between where the reader is and where they could be, in a way that motivates action rather than just making them feel bad. Implies the gap is closeable.
+- Curiosity Gap: opens a specific information gap the reader needs to close. The tension is "I know something exists that I don't have yet." Strongest when combined with specific numbers or outcomes.
+- Aspiration/Possibility: makes the reader believe a desired outcome is achievable for them specifically. Different from inspiration — it creates active projection into a future state. Requires believability (impressive but not impossible outcomes, realistic timeframes).
 """
 
 CLASSIFICATION_SCHEMA = {
@@ -89,6 +100,8 @@ CLASSIFICATION_SCHEMA = {
     "hook_analysis": "1-2 sentence explanation of why you chose this hook type",
     "body_analysis": "1-2 sentence explanation of why you chose this body type",
     "cta_analysis": "1-2 sentence explanation of why you chose this CTA type",
+    "emotional_triggers": "comma-separated list of ALL active triggers from: Identity Validation, Status Signaling, Tribal Belonging, Productive Discomfort, Curiosity Gap, Aspiration/Possibility — include every trigger that is meaningfully present",
+    "emotional_triggers_analysis": "1-2 sentences explaining which triggers fire and exactly how they manifest in this specific post",
     "standout_pattern": "The single most replicable structural pattern in this post (1 sentence)",
 }
 
@@ -350,6 +363,27 @@ def parse_plain_text(raw: str, source_label: str, follower_count: int | None = N
 
         # --- Extract & clean post text ---
         post_text = block[body_start:eng_abs].strip()
+
+        # Strip LinkedIn UI chrome that leaks into the text when timestamp detection
+        # is imperfect — e.g. "Follow" button, profile sub-lines, image labels.
+        # Applied line-by-line at the START of the text until we hit real content.
+        _HEADER_LINE = re.compile(
+            r"^("
+            r"Follow"                                # un-followed profile button
+            r"|• ?Follow\w*"                         # "• Following", "• Follower"
+            r"|\w[\w\s]*\w\s*•\s*(Follower|Follow|Connection|Influencer)\w*"
+            r"|View my services"
+            r"|Visit my website"
+            r"|View\s+.+?\s+graphic link"
+            r"|\d+[\w\s,]+followers"                 # "9,198 followers"
+            r")\s*$",
+            re.I,
+        )
+        lines = post_text.splitlines()
+        while lines and _HEADER_LINE.match(lines[0].strip()):
+            lines.pop(0)
+        post_text = "\n".join(lines).strip()
+
         post_text = re.sub(r"Activate to view larger image,?\s*\n?", "", post_text)
         post_text = re.sub(r"No alternative text description for this image\s*\n?", "", post_text)
         post_text = re.sub(r"hashtag#", "#", post_text)
